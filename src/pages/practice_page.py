@@ -1,7 +1,6 @@
 from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QLabel, QVBoxLayout, QHBoxLayout, 
-    QPushButton, QFrame, QGridLayout, QSpacerItem, QSizePolicy,
-    QScrollArea, QProgressBar
+    QWidget, QLabel, QVBoxLayout, QHBoxLayout, 
+    QPushButton, QFrame, QScrollArea
 )
 from PyQt5.QtGui import QFont, QPixmap, QPainter, QLinearGradient, QBrush, QColor
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
@@ -11,8 +10,8 @@ from PyQt5.QtGui import QImage, QPixmap, QFont
 import numpy as np
 import joblib
 import mediapipe as mp
-
-
+from src.audio.empezar_audio import start_audio
+from src.helpers.general import run_proccess
 
 class GradientLabel(QLabel):
     """Label con gradiente personalizado"""
@@ -194,6 +193,15 @@ class ChallengeWidget(QWidget):
         """)
         
         # Cargar imagen o emoji de fallback
+        self.update_sign_image()
+        
+        layout.addWidget(self.letter_label)
+        layout.addWidget(self.sign_image)
+        
+        self.setLayout(layout)
+    
+    def update_sign_image(self):
+        """Actualizar la imagen de la seña según la letra actual"""
         pixmap = QPixmap(f"images/utils/{self.current_letter.lower()}.jpg")
         if not pixmap.isNull():
             pixmap = pixmap.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -202,39 +210,16 @@ class ChallengeWidget(QWidget):
             self.sign_image.setText("🤟")
             self.sign_image.setFont(QFont("Arial", 50))
             self.sign_image.setStyleSheet(self.sign_image.styleSheet() + "color: #9C27B0;")
-        
-        # Instrucción
-        instruction = QLabel(f'Haz la seña para "{self.current_letter}" frente a la cámara')
-        instruction.setFont(QFont("Comic Sans MS", 14))
-        instruction.setAlignment(Qt.AlignCenter)
-        instruction.setWordWrap(True)
-        instruction.setStyleSheet("""
-            QLabel {
-                color: #424242;
-                background: rgba(255, 255, 255, 0.5);
-                border-radius: 10px;
-                padding: 10px;
-            }
-        """)
-        
-        layout.addWidget(self.letter_label)
-        layout.addWidget(self.sign_image)
-        layout.addWidget(instruction)
-        
-        self.setLayout(layout)
     
     def update_challenge(self, letter):
         """Actualizar el desafío con una nueva letra"""
-        self.current_letter = letter
-        self.letter_label.setText(letter)
-        
-        # Actualizar imagen
-        pixmap = QPixmap(f"images/utils/{letter.lower()}.jpg")
-        if not pixmap.isNull():
-            pixmap = pixmap.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.sign_image.setPixmap(pixmap)
-        else:
-            self.sign_image.setText("🤟")
+        self.current_letter = letter.upper()
+        self.letter_label.setText(self.current_letter)
+        self.update_sign_image()
+    
+    def getValidationChallenger(self, letra_actual: str):
+        """Validar si la letra detectada coincide con el desafío actual"""
+        return letra_actual.upper() == self.current_letter.upper()
 
 class ResultWidget(QWidget):
     """Widget para mostrar resultados de detección"""
@@ -242,6 +227,8 @@ class ResultWidget(QWidget):
         super().__init__(parent)
         self.prediction = None
         self.is_correct = None
+        self.points = 0
+        self.value_initial = "@"
         self.setupUI()
         
     def setupUI(self):
@@ -259,6 +246,11 @@ class ResultWidget(QWidget):
         self.result_text.setAlignment(Qt.AlignCenter)
         self.result_text.setStyleSheet("color: #666666;")
         
+        self.points_text = QLabel(f"Puntos: {self.points}")
+        self.points_text.setFont(QFont("Comic Sans MS", 16, QFont.Bold))
+        self.points_text.setAlignment(Qt.AlignCenter)
+        self.points_text.setStyleSheet("color: #4CAF50;")
+        
         self.detail_text = QLabel("Activa la cámara y haz una seña para comenzar")
         self.detail_text.setFont(QFont("Comic Sans MS", 12))
         self.detail_text.setAlignment(Qt.AlignCenter)
@@ -271,6 +263,7 @@ class ResultWidget(QWidget):
         
         layout.addWidget(self.status_icon)
         layout.addWidget(self.result_text)
+        layout.addWidget(self.points_text)
         layout.addWidget(self.detail_text)
         layout.addWidget(self.retry_button)
         
@@ -282,15 +275,25 @@ class ResultWidget(QWidget):
         self.is_correct = is_correct
         
         if is_correct:
+            if self.value_initial == prediction:
+                return
+            
+            
+            self.points += 10
             self.status_icon.setText("✅")
-            self.result_text.setText(f"{prediction}")
+            self.result_text.setText(f"¡Correcto! {prediction}")
             self.result_text.setStyleSheet("color: #4CAF50; font-size: 24px;")
-            self.detail_text.setText("¡Excelente trabajo! ¡Sigue así!")
+            self.points_text.setText(f"Puntos: {self.points}")
+            self.detail_text.setText("¡Excelente trabajo! +10 puntos")
             self.detail_text.setStyleSheet("color: #2E7D32;")
             self.retry_button.hide()
+            
+            self.value_initial = prediction
+            # Reproducir audio de retroalimentación
+            run_proccess(lambda: start_audio(f"Seña correcta de la letra {prediction}"))
         else:
             self.status_icon.setText("❌")
-            self.result_text.setText(f"{prediction}")
+            self.result_text.setText(f"Incorrecto: {prediction}")
             self.result_text.setStyleSheet("color: #F44336; font-size: 24px;")
             self.detail_text.setText("Sigue intentando, ¡tú puedes!")
             self.detail_text.setStyleSheet("color: #C62828;")
@@ -335,6 +338,7 @@ class CameraWidget(QWidget):
         self.mp_drawing_styles = mp.solutions.drawing_styles
         
         self.setupUI()
+
         
     def setupUI(self):
         layout = QVBoxLayout()
@@ -611,31 +615,10 @@ class CameraWidget(QWidget):
 
 def page_practice():
     """Página principal de práctica"""
-    
-    # Widget principal con scroll
     scroll_area = QScrollArea()
     scroll_area.setWidgetResizable(True)
     scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-    scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-    scroll_area.setStyleSheet("""
-        QScrollArea {
-            border: none;
-            background: transparent;
-        }
-        QScrollBar:vertical {
-            background: rgba(255, 255, 255, 0.1);
-            width: 12px;
-            border-radius: 6px;
-        }
-        QScrollBar::handle:vertical {
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 #9C27B0, stop:1 #2196F3);
-            border-radius: 6px;
-            min-height: 20px;
-        }
-    """)
     
-    # Widget de contenido
     content_widget = QWidget()
     content_widget.setStyleSheet("""
         QWidget {
@@ -646,153 +629,64 @@ def page_practice():
         }
     """)
     
-    # Layout principal
     main_layout = QVBoxLayout()
     main_layout.setSpacing(30)
     main_layout.setContentsMargins(30, 30, 30, 30)
     
-    # === HEADER ===
-    header_layout = QVBoxLayout()
-    header_layout.setAlignment(Qt.AlignCenter)
-    header_layout.setSpacing(15)
-    
-    # Título principal
-    title = GradientLabel("🎯 Zona de Práctica 🎯", [(138, 43, 226), (33, 150, 243)])
+    # Header
+    title = QLabel("🎯 Zona de Práctica 🎯")
     title.setFont(QFont("Comic Sans MS", 32, QFont.Bold))
     title.setAlignment(Qt.AlignCenter)
-    title.setMinimumHeight(80)
-    title.setStyleSheet("border-radius: 20px; margin: 10px;")
     
-    # Subtítulo
-    subtitle = QLabel("Activa tu cámara y practica las señas. ¡El sistema te dará retroalimentación en tiempo real!")
-    subtitle.setFont(QFont("Comic Sans MS", 16))
-    subtitle.setAlignment(Qt.AlignCenter)
-    subtitle.setWordWrap(True)
-    subtitle.setStyleSheet("""
-        QLabel {
-            color: #424242;
-            background: rgba(255, 255, 255, 0.7);
-            border-radius: 15px;
-            padding: 15px;
-            margin: 10px;
-        }
-    """)
-    
-    header_layout.addWidget(title)
-    header_layout.addWidget(subtitle)
-    
-    # === PUNTOS Y DESAFÍO ACTUAL ===
-    stats_layout = QHBoxLayout()
-    stats_layout.setAlignment(Qt.AlignCenter)
-    stats_layout.setSpacing(20)
-    
-    # Puntos
-    points_label = QLabel("🏆 Puntos: 0")
-    points_label.setFont(QFont("Comic Sans MS", 16, QFont.Bold))
-    points_label.setStyleSheet("""
-        QLabel {
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 #4CAF50, stop:1 #2196F3);
-            color: white;
-            border-radius: 20px;
-            padding: 12px 24px;
-            border: 2px solid rgba(255, 255, 255, 0.3);
-        }
-    """)
-    
-    # Desafío actual
-    challenge_label = QLabel("🎯 Practica: A")
-    challenge_label.setFont(QFont("Comic Sans MS", 16, QFont.Bold))
-    challenge_label.setStyleSheet("""
-        QLabel {
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 #9C27B0, stop:1 #E91E63);
-            color: white;
-            border-radius: 20px;
-            padding: 12px 24px;
-            border: 2px solid rgba(255, 255, 255, 0.3);
-        }
-    """)
-    
-    stats_layout.addWidget(points_label)
-    stats_layout.addWidget(challenge_label)
-    
-    # === LAYOUT PRINCIPAL DE CONTENIDO ===
-    content_layout = QHBoxLayout()
-    content_layout.setSpacing(30)
-    
-    # === COLUMNA IZQUIERDA: CONTROLES Y MÉTRICAS ===
-    left_column = QVBoxLayout()
-    
-    # Layout para las cards
-    cards_layout = QHBoxLayout()
-    cards_layout.setSpacing(20)  # Añadir espacio entre las cards
-    
-    # Tarjeta de desafío actual
+    # Widgets principales
     challenge_widget = ChallengeWidget()
-    challenge_card = InfoCard("🎯 Seña a Practicar", challenge_widget, "challenge")
-    challenge_card.setMinimumWidth(400)
-    challenge_card.setMaximumWidth(500)
-    
-    # Tarjeta de resultado
     result_widget = ResultWidget()
-    result_card = InfoCard("🤖 Resultado de la Detección", result_widget, "default")
-    result_card.setMinimumWidth(400)
-    result_card.setMaximumWidth(500)
-    
-    # Añadir las cards al layout horizontal
-    cards_layout.addWidget(challenge_card)
-    cards_layout.addWidget(result_card)
-    
-    # Botón siguiente desafío
-    next_challenge_btn = StyledButton("➡️ Siguiente Desafío", "secondary")
-    next_challenge_btn.setMinimumWidth(500)
-    next_challenge_btn.setMaximumWidth(500)
-    
-    # Añadir el layout de las cards y el botón al layout principal
-    left_column.addLayout(cards_layout)
-    left_column.addWidget(next_challenge_btn)
-    left_column.addStretch()
-    
-    # === COLUMNA DERECHA: CÁMARA ===
     camera_widget = CameraWidget()
-    camera_card = InfoCard("📹 Cámara de Práctica", camera_widget, "camera")
-    camera_card.setMaximumHeight(700)
     
-    # === ENSAMBLAR COLUMNAS ===
-    content_layout.addLayout(left_column, 2)  # 40% del ancho
-    content_layout.addWidget(camera_card, 2)   # 60% del ancho
+    # Layout para los widgets
+    content_layout = QHBoxLayout()
+    left_column = QVBoxLayout()
+    right_column = QVBoxLayout()
     
-    # === ENSAMBLAR TODO ===
-    main_layout.addLayout(header_layout)
-    main_layout.addLayout(stats_layout)
+    # Configurar columnas
+    left_column.addWidget(challenge_widget)
+    left_column.addWidget(result_widget)
+    
+    right_column.addWidget(camera_widget)
+    
+    content_layout.addLayout(left_column, 1)
+    content_layout.addLayout(right_column, 1)
+    
+    # Botones de control
+    control_layout = QHBoxLayout()
+    next_challenge_btn = StyledButton("➡️ Siguiente Desafío", "secondary")
+    control_layout.addWidget(next_challenge_btn)
+    
+    # Ensamblar todo
+    main_layout.addWidget(title)
     main_layout.addLayout(content_layout)
-    main_layout.addStretch()
+    main_layout.addLayout(control_layout)
     
     content_widget.setLayout(main_layout)
     scroll_area.setWidget(content_widget)
-        
-    letters = ['A', 'B', 'C', 'D', 'E']
-    detected = random.choice(letters)
-    is_correct = detected == challenge_widget.current_letter
-    result_widget.update_result(detected, is_correct)
-    print(f"Detectado: {detected}, Correcto: {is_correct}")
     
+    # Funcionalidad
     def on_next_challenge():
-        # Cambiar a la siguiente letra
-        letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']
-        new_letter = random.choice(letters)
+        letters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'SPACE']
+        new_letter = random.choice(letters).lower()
         challenge_widget.update_challenge(new_letter)
-        challenge_label.setText(f"🎯 Practica: {new_letter}")
         result_widget.reset_result()
-        print(f"Nuevo desafío: {new_letter}")
     
-    def on_retry():
-        result_widget.reset_result()
-        print("Reintentando...")
+    def validation_signal(letra_detectada):
+        equals = challenge_widget.getValidationChallenger(letra_detectada)
+        result_widget.update_result(letra_detectada, equals)
     
-
+    # Conexión de señales
+    camera_widget.detection_signal.connect(validation_signal)
     next_challenge_btn.clicked.connect(on_next_challenge)
-    result_widget.retry_button.clicked.connect(on_retry)
+    result_widget.retry_button.clicked.connect(lambda: result_widget.reset_result())
+    
+    # Iniciar con un desafío aleatorio
+    on_next_challenge()
     
     return scroll_area
